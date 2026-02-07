@@ -33,6 +33,12 @@ export default function SendHIDPanel({
     text: string;
   } | null>(null);
 
+  const changeHexData = (str: string) => {
+    const raw = str.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+    const withSpaces = raw.replace(/(.{2})/g, "$1 ").trim();
+    setHexData(withSpaces);
+  };
+
   const handleSend = async () => {
     if (!device) {
       setMessage({ type: "err", text: "Connect to device first" });
@@ -40,15 +46,12 @@ export default function SendHIDPanel({
     }
     const rid = Number(reportId);
     if (Number.isNaN(rid) || rid < 0 || rid > 255) {
-      setMessage({ type: "err", text: "Report ID should in 0–255" });
+      setMessage({ type: "err", text: "Report ID must be between 0 and 255" });
       return;
     }
     const data = hexStringToBytes(hexData);
     if (data.length === 0 && hexData.trim() !== "") {
-      setMessage({
-        type: "err",
-        text: "Format Error",
-      });
+      setMessage({ type: "err", text: "Invalid hex: must be an even number of hex digits" });
       return;
     }
     setSending(true);
@@ -79,7 +82,7 @@ export default function SendHIDPanel({
               onChange={(e) => {
                 setReportId(e.target.value);
               }}
-              placeholder="dex or hex with 0x"
+              placeholder="e.g. 1 or 0x01"
               className="rounded border border-input bg-background px-2 py-1.5 font-mono text-sm w-45"
             />
           </div>
@@ -89,8 +92,8 @@ export default function SendHIDPanel({
         <div className="flex flex-1 flex-col">
           <textarea
             value={hexData}
-            onChange={(e) => setHexData(e.target.value)}
-            placeholder="01 02 ff or 01 02 ff"
+            onChange={(e) => changeHexData(e.target.value)}
+            placeholder="01 02 FF (spaces auto-added)"
             rows={3}
             className="rounded border border-input bg-background px-2 py-1.5 font-mono text-sm resize-y"
           />

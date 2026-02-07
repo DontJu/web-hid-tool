@@ -17,17 +17,17 @@ import { Input } from "@/components/ui/input";
 export default function DataDisplay() {
   const { dataArray, clearShowData } = useShowData();
   const [decodeOption, setDecodeOption] = useState<decodeOptionType>("hex");
-  const [spliter, setSpliter] = useState<string>(" ");
+  const [separator, setSeparator] = useState<string>(" ");
   const showDataList: string[] = useMemo(() => {
     switch (decodeOption) {
       case "hex": {
-        return dataArray.map((item) => toHexString(item, spliter));
+        return dataArray.map((item) => toHexString(item, separator));
       }
       case "dex": {
-        return dataArray.map((item) => toDexString(item, spliter));
+        return dataArray.map((item) => toDexString(item, separator));
       }
     }
-  }, [decodeOption, dataArray, spliter]);
+  }, [decodeOption, dataArray, separator]);
 
   const changeDecodeOption = (option: string) => {
     if (option === "hex" || option === "dex") setDecodeOption(option);
@@ -69,11 +69,11 @@ export default function DataDisplay() {
         <Tabs value={decodeOption} onValueChange={changeDecodeOption}>
           <TabsList>
             <TabsTrigger value="hex">Hex</TabsTrigger>
-            <TabsTrigger value="dex">Dex</TabsTrigger>
+            <TabsTrigger value="dex">Dec</TabsTrigger>
           </TabsList>
         </Tabs>
-        <Label className="pl-2">Spliter: </Label>
-        <Input className="w-20" value={spliter} onChange={(e)=>setSpliter(e.target.value)}></Input>
+        <Label className="pl-2">Separator: </Label>
+        <Input className="w-20" value={separator} onChange={(e)=>setSeparator(e.target.value)}></Input>
       </CardFooter>
     </Card>
   );

@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatHex16 } from "@/utils/HexUitls";
+import { formatHex16 } from "@/utils/HexUtils";
 
 export default function HIDDeviceInfo({ device }: HIDDeviceInfoProps) {
   if (!device) {
@@ -30,11 +30,11 @@ export default function HIDDeviceInfo({ device }: HIDDeviceInfoProps) {
       </CardHeader>
       <CardContent>
         <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm pb-3 pl-2 pr-2">
-          <Label className="text-muted-foreground">product name</Label>
+          <Label className="text-muted-foreground">Product Name</Label>
           <div className="font-mono">{device.productName || "—"}</div>
-          <Label className="text-muted-foreground">vid</Label>
+          <Label className="text-muted-foreground">Vendor ID</Label>
           <div className="font-mono">{formatHex16(device.vendorId)}</div>
-          <Label className="text-muted-foreground">pid</Label>
+          <Label className="text-muted-foreground">Product ID</Label>
           <div className="font-mono">{formatHex16(device.productId)}</div>
         </div>
         {collections.length > 0 && (

@@ -1,4 +1,4 @@
-/** 将多种输入统一为 Uint8Array；DataView 使用 getUint8 逐字节复制，避免错读或共享 buffer 问题 */
+/** Normalize various inputs to Uint8Array; DataView uses getUint8 per-byte copy to avoid misreads or shared buffer issues */
 function toUint8Array(data: Uint8Array | number[] | DataView): Uint8Array {
   if (data instanceof DataView) {
     const out = new Uint8Array(data.byteLength);
@@ -15,24 +15,23 @@ function toUint8Array(data: Uint8Array | number[] | DataView): Uint8Array {
 
 export function toHexString(
   data: Uint8Array | number[] | DataView,
-  spliter: string = ", ",
+  separator: string = ", ",
 ): string {
   const dataArray = toUint8Array(data);
   return Array.from(
     dataArray,
     (b) => "0x" + b.toString(16).padStart(2, "0").toUpperCase(),
-  ).join(spliter);
+  ).join(separator);
 }
 
 export function toDexString(
   data: Uint8Array | number[] | DataView,
-  spliter: string = ", ",
+  separator: string = ", ",
 ): string {
   const dataArray = toUint8Array(data);
-  return Array.from(dataArray, (item) => item.toString(10)).join(spliter);
+  return Array.from(dataArray, (item) => item.toString(10)).join(separator);
 }
 
-/** 将十六进制字符串解析为 Uint8Array，支持 "01 02 ff"、"0102ff"、"0x01 0x02" 等格式 */
 export function hexStringToBytes(hex: string): Uint8Array {
   const normalized = hex.replace(/0x|[\s,]/gi, "").toLowerCase();
   if (!/^[0-9a-f]*$/.test(normalized) || normalized.length % 2 !== 0) {

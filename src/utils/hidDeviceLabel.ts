@@ -1,4 +1,4 @@
-import { formatHex16 } from "./HexUitls";
+import { formatHex16 } from "./HexUtils";
 
 export function getHIDDeviceInterfaceLabel(device: HIDDevice): string {
   const collections = device.collections ?? [];
