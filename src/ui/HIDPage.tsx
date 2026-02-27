@@ -21,29 +21,37 @@ export default function HIDPage() {
     }
   },[requestDevice])
   return (
-    <div className="mx-auto max-w-[1280px] flex w-full flex-col p-4 md:p-6">
-      <main className="flex flex-col flex-1  gap-4 p-4">
-        <section>
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="min-w-[200px] flex-1">
+    <div className="mx-auto max-w-5xl flex w-full flex-col p-6 md:p-8">
+      <main className="flex flex-col flex-1 gap-6">
+        <section className="bg-card rounded-2xl border border-border/50 shadow-sm p-6">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="min-w-[240px] flex-1">
               <HIDDeviceSelect
                 allDevices={hidDevices}
                 selectedDevice={selectedDevice}
                 onSelectDevice={setSelectedDevice}
               />
             </div>
-            <Button variant="outline" size="sm" onClick={connectToDevice}>
+            <Button 
+              variant="default" 
+              size="default" 
+              onClick={connectToDevice}
+              className="rounded-full px-6"
+            >
               Get Permission
             </Button>
           </div>
         </section>
-        <section>
+        
+        <section className="bg-card rounded-2xl border border-border/50 shadow-sm p-6">
           <HIDDeviceInfo device={selectedDevice} />
         </section>
-        <section>
+        
+        <section className="bg-card rounded-2xl border border-border/50 shadow-sm p-6">
           <DataDisplay />
         </section>
-        <section>
+        
+        <section className="bg-card rounded-2xl border border-border/50 shadow-sm p-6">
           <SendHIDPanel device={selectedDevice} sendData={sendData} />
         </section>
       </main>
