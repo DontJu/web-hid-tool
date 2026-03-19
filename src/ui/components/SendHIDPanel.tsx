@@ -8,6 +8,8 @@ import {
   isValidSeparator,
 } from "@/utils/ByteArrayToStringUtils";
 import { useState, useCallback, useRef } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useShowData } from "@/state/showData";
 
 interface SendHIDPanelProps {
   device: HIDDevice | null;
@@ -20,6 +22,8 @@ interface SendHIDPanelProps {
 
 // Default separator
 const DEFAULT_SEPARATOR = " ";
+
+type LoopField = 'duration' | 'count' | 'interval';
 
 export default function SendHIDPanel({
   device,
@@ -38,6 +42,18 @@ export default function SendHIDPanel({
 
   // Ref to track if we're currently converting to avoid circular updates
   const isConvertingRef = useRef(false);
+
+  // Loop mode state
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopDuration, setLoopDuration] = useState("");
+  const [loopCount, setLoopCount] = useState("");
+  const [loopInterval, setLoopInterval] = useState("");
+  const [expectedResponse, setExpectedResponse] = useState("");
+  const [loopRunning, setLoopRunning] = useState(false);
+  const [loopProgress, setLoopProgress] = useState({ current: 0, total: 0 });
+  const loopAbortRef = useRef(false);
+  const editOrderRef = useRef<LoopField[]>([]);
+  const [autoCalcTarget, setAutoCalcTarget] = useState<LoopField | null>(null);
 
   /**
    * Get effective separator (use default if empty)
@@ -134,11 +150,20 @@ export default function SendHIDPanel({
       setInputData(convertedData);
       setInputFormat(newFormat as "hex" | "dex");
 
+      // Convert expected response to new format
+      const convertedExpected = convertDataToFormat(
+        expectedResponse,
+        inputFormat,
+        newFormat as "hex" | "dex",
+        separator,
+      );
+      setExpectedResponse(convertedExpected);
+
       setTimeout(() => {
         isConvertingRef.current = false;
       }, 0);
     },
-    [inputData, inputFormat, separator, reportId, convertDataToFormat, formatReportId],
+    [inputData, inputFormat, separator, reportId, expectedResponse, convertDataToFormat, formatReportId],
   );
 
   /**
@@ -221,14 +246,255 @@ export default function SendHIDPanel({
         setInputData(reformatted);
       }
 
+      // Reformat expected response with new separator
+      const expBytes = parseInputToBytes(expectedResponse, inputFormat, oldEffectiveSep);
+      if (expBytes.length > 0) {
+        setExpectedResponse(bytesToFormatString(expBytes, inputFormat, newEffectiveSep));
+      }
+
       setSeparator(char);
 
       setTimeout(() => {
         isConvertingRef.current = false;
       }, 0);
     },
-    [inputData, inputFormat, separator, getEffectiveSeparator],
+    [inputData, inputFormat, separator, expectedResponse, getEffectiveSeparator],
   );
+
+  const handleExpectedResponseChange = useCallback(
+    (str: string) => {
+      const effectiveSep = getEffectiveSeparator(separator);
+      if (inputFormat === "hex") {
+        const raw = str.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+        let formatted = "";
+        for (let i = 0; i < raw.length; i++) {
+          if (i > 0 && i % 2 === 0) formatted += effectiveSep;
+          formatted += raw[i];
+        }
+        setExpectedResponse(formatted);
+      } else {
+        const escapedSep = effectiveSep.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const cleaned = str.replace(new RegExp(`[^0-9${escapedSep}]`, "g"), "");
+        const parts = cleaned.split(effectiveSep);
+        const clampedParts = parts.map(part => {
+          if (!part.trim()) return part;
+          const num = parseInt(part, 10);
+          if (isNaN(num)) return part;
+          if (num < 0) return "0";
+          if (num > 255) return "255";
+          return part;
+        });
+        setExpectedResponse(clampedParts.join(effectiveSep));
+      }
+    },
+    [inputFormat, separator, getEffectiveSeparator],
+  );
+
+  const handleLoopFieldChange = useCallback((field: LoopField, value: string) => {
+    const numStr = value.replace(/[^0-9]/g, '');
+
+    const setters: Record<LoopField, (v: string) => void> = {
+      duration: setLoopDuration,
+      count: setLoopCount,
+      interval: setLoopInterval,
+    };
+    setters[field](numStr);
+
+    const order = editOrderRef.current.filter(f => f !== field);
+    order.push(field);
+    if (order.length > 2) order.shift();
+    editOrderRef.current = [...order];
+
+    const allFields: LoopField[] = ['duration', 'count', 'interval'];
+    const target = allFields.find(f => !order.includes(f)) || null;
+    setAutoCalcTarget(target);
+
+    if (order.length === 2 && target) {
+      const getVal = (f: LoopField): number => {
+        if (f === field) return parseInt(numStr) || 0;
+        if (f === 'duration') return parseInt(loopDuration) || 0;
+        if (f === 'count') return parseInt(loopCount) || 0;
+        if (f === 'interval') return parseInt(loopInterval) || 0;
+        return 0;
+      };
+
+      const d = getVal('duration');
+      const c = getVal('count');
+      const iv = getVal('interval');
+
+      if (target === 'duration' && c > 0 && iv > 0) {
+        setLoopDuration(String(c * iv));
+      } else if (target === 'count' && d > 0 && iv > 0) {
+        setLoopCount(String(Math.ceil(d / iv)));
+      } else if (target === 'interval' && d > 0 && c > 0) {
+        setLoopInterval(String(Math.round(d / c)));
+      }
+    }
+  }, [loopDuration, loopCount, loopInterval]);
+
+  const waitForResponse = useCallback((prevLength: number, timeoutMs: number): Promise<DataView | null> => {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (result: DataView | null) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        clearInterval(abortChecker);
+        unsub();
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => finish(null), timeoutMs);
+      const abortChecker = setInterval(() => {
+        if (loopAbortRef.current) finish(null);
+      }, 50);
+      const unsub = useShowData.subscribe((state) => {
+        if (state.dataArray.length > prevLength) {
+          finish(state.dataArray[state.dataArray.length - 1]);
+        }
+      });
+
+      const current = useShowData.getState().dataArray;
+      if (current.length > prevLength) {
+        finish(current[current.length - 1]);
+      }
+    });
+  }, []);
+
+  const compareBytes = useCallback((dataView: DataView, expected: Uint8Array): boolean => {
+    if (dataView.byteLength !== expected.length) return false;
+    for (let i = 0; i < expected.length; i++) {
+      if (dataView.getUint8(i) !== expected[i]) return false;
+    }
+    return true;
+  }, []);
+
+  const handleStopLoop = useCallback(() => {
+    loopAbortRef.current = true;
+  }, []);
+
+  const handleLoopSend = async () => {
+    if (!device) {
+      setMessage({ type: "err", text: "Connect to device first" });
+      return;
+    }
+
+    const rid = parseReportId(reportId, inputFormat);
+    if (isNaN(rid) || rid < 0 || rid > 255) {
+      setMessage({ type: "err", text: "Report ID must be between 0 and 255" });
+      return;
+    }
+
+    const effectiveSep = getEffectiveSeparator(separator);
+    const data = parseInputToBytes(inputData, inputFormat, effectiveSep);
+    if (data.length === 0 && inputData.trim() !== "") {
+      setMessage({
+        type: "err",
+        text: `Invalid ${inputFormat === "hex" ? "hex" : "decimal"} data`,
+      });
+      return;
+    }
+
+    const totalCount = parseInt(loopCount) || 0;
+    const intervalMs = parseInt(loopInterval) || 0;
+
+    if (totalCount <= 0) {
+      setMessage({ type: "err", text: "Loop count must be greater than 0" });
+      return;
+    }
+    if (intervalMs <= 0) {
+      setMessage({ type: "err", text: "Interval must be greater than 0" });
+      return;
+    }
+
+    let expectedBytes: Uint8Array | null = null;
+    if (expectedResponse.trim()) {
+      expectedBytes = parseInputToBytes(expectedResponse, inputFormat, effectiveSep);
+      if (expectedBytes.length === 0) {
+        setMessage({ type: "err", text: "Invalid expected response data" });
+        return;
+      }
+    }
+
+    setLoopRunning(true);
+    setSending(true);
+    setLoopProgress({ current: 0, total: totalCount });
+    loopAbortRef.current = false;
+    setMessage(null);
+
+    let stoppedEarly = false;
+
+    for (let i = 0; i < totalCount; i++) {
+      if (loopAbortRef.current) {
+        setMessage({ type: "err", text: `Loop stopped at ${i}/${totalCount}` });
+        stoppedEarly = true;
+        break;
+      }
+
+      setLoopProgress({ current: i + 1, total: totalCount });
+      const cycleStart = Date.now();
+      const prevDataLen = useShowData.getState().dataArray.length;
+
+      const ok = await doSendData(device, rid, data);
+      if (!ok) {
+        setMessage({ type: "err", text: `Send failed at iteration ${i + 1}` });
+        stoppedEarly = true;
+        break;
+      }
+
+      if (expectedBytes) {
+        const responseData = await waitForResponse(prevDataLen, intervalMs);
+        if (loopAbortRef.current) {
+          setMessage({ type: "err", text: `Loop stopped at ${i + 1}/${totalCount}` });
+          stoppedEarly = true;
+          break;
+        }
+        if (!responseData) {
+          setMessage({ type: "err", text: `No response at iteration ${i + 1}` });
+          stoppedEarly = true;
+          break;
+        }
+        if (!compareBytes(responseData, expectedBytes)) {
+          const actual = new Uint8Array(responseData.buffer, responseData.byteOffset, responseData.byteLength);
+          const actualStr = bytesToFormatString(actual, inputFormat, effectiveSep);
+          setMessage({
+            type: "err",
+            text: `Response mismatch at #${i + 1}: got [${actualStr}]`,
+          });
+          stoppedEarly = true;
+          break;
+        }
+      }
+
+      if (i < totalCount - 1) {
+        const elapsed = Date.now() - cycleStart;
+        const remaining = intervalMs - elapsed;
+        if (remaining > 0) {
+          await new Promise<void>((resolve) => {
+            let settled = false;
+            const settle = () => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(sleepTimer);
+              clearInterval(abortCheck);
+              resolve();
+            };
+            const sleepTimer = setTimeout(settle, remaining);
+            const abortCheck = setInterval(() => {
+              if (loopAbortRef.current) settle();
+            }, 50);
+          });
+        }
+      }
+    }
+
+    if (!stoppedEarly) {
+      setMessage({ type: "ok", text: `Loop completed: ${totalCount} iterations` });
+    }
+
+    setLoopRunning(false);
+    setSending(false);
+  };
 
   const handleSend = async () => {
     if (!device) {
@@ -309,6 +575,116 @@ export default function SendHIDPanel({
         </p>
       </div>
 
+      {/* Loop Settings */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="loop-enabled"
+            checked={loopEnabled}
+            onCheckedChange={(checked) => setLoopEnabled(checked === true)}
+            disabled={loopRunning}
+          />
+          <Label htmlFor="loop-enabled" className="text-sm font-medium cursor-pointer">
+            Loop Send
+          </Label>
+          {loopRunning && (
+            <span className="text-xs text-muted-foreground ml-2">
+              {loopProgress.current} / {loopProgress.total}
+            </span>
+          )}
+        </div>
+
+        {loopEnabled && (
+          <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Duration (ms)
+                  </Label>
+                  {autoCalcTarget === 'duration' && (
+                    <span className="text-[10px] text-primary font-medium bg-primary/10 px-1.5 rounded">auto</span>
+                  )}
+                </div>
+                <Input
+                  value={loopDuration}
+                  onChange={(e) => handleLoopFieldChange('duration', e.target.value)}
+                  placeholder="5000"
+                  className="font-mono text-sm"
+                  disabled={loopRunning}
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Count
+                  </Label>
+                  {autoCalcTarget === 'count' && (
+                    <span className="text-[10px] text-primary font-medium bg-primary/10 px-1.5 rounded">auto</span>
+                  )}
+                </div>
+                <Input
+                  value={loopCount}
+                  onChange={(e) => handleLoopFieldChange('count', e.target.value)}
+                  placeholder="10"
+                  className="font-mono text-sm"
+                  disabled={loopRunning}
+                />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    Interval (ms)
+                  </Label>
+                  {autoCalcTarget === 'interval' && (
+                    <span className="text-[10px] text-primary font-medium bg-primary/10 px-1.5 rounded">auto</span>
+                  )}
+                </div>
+                <Input
+                  value={loopInterval}
+                  onChange={(e) => handleLoopFieldChange('interval', e.target.value)}
+                  placeholder="500"
+                  className="font-mono text-sm"
+                  disabled={loopRunning}
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Expected Response (optional, stop if mismatch)
+              </Label>
+              <Input
+                value={expectedResponse}
+                onChange={(e) => handleExpectedResponseChange(e.target.value)}
+                placeholder={
+                  inputFormat === "hex"
+                    ? `01${effectiveSep}02${effectiveSep}FF`
+                    : `1${effectiveSep}2${effectiveSep}255`
+                }
+                className="font-mono text-sm"
+                disabled={loopRunning}
+              />
+            </div>
+
+            {loopRunning && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Progress</span>
+                  <span>{loopProgress.current} / {loopProgress.total}</span>
+                </div>
+                <div className="h-2 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${loopProgress.total > 0 ? (loopProgress.current / loopProgress.total) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Footer with Format, Separator and Send Button */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap items-center gap-4">
@@ -358,13 +734,33 @@ export default function SendHIDPanel({
               {message.text}
             </span>
           )}
-          <Button
-            onClick={handleSend}
-            disabled={!device || sending}
-            className="rounded-full px-6"
-          >
-            {sending ? "Sending..." : "Send"}
-          </Button>
+          {loopEnabled ? (
+            loopRunning ? (
+              <Button
+                onClick={handleStopLoop}
+                variant="destructive"
+                className="rounded-full px-6"
+              >
+                Stop
+              </Button>
+            ) : (
+              <Button
+                onClick={handleLoopSend}
+                disabled={!device || sending}
+                className="rounded-full px-6"
+              >
+                Start Loop
+              </Button>
+            )
+          ) : (
+            <Button
+              onClick={handleSend}
+              disabled={!device || sending}
+              className="rounded-full px-6"
+            >
+              {sending ? "Sending..." : "Send"}
+            </Button>
+          )}
         </div>
       </div>
       
